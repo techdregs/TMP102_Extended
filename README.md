@@ -1,6 +1,6 @@
 # TMP102 Extended ESPHome Component
 
-ESPHome external component for the TMP102 I2C temperature sensor. Based on the original ESPHome TMP102 component... just extended. It publishes the measured temperature and exposes TMP102 features that the stock basic driver usually does not: extended temperature format, one-shot sampling, conversion-rate control, thermostat/alert configuration, alert polarity, fault queue, and optional alert binary sensor.
+ESPHome external component for the TMP102 I2C temperature sensor. Based on the original ESPHome TMP102 component... just extended a bit. It publishes the measured temperature and exposes TMP102 features that the stock basic driver usually does not: extended temperature format, one-shot sampling, conversion-rate control, thermostat/alert configuration, alert polarity, fault queue, and optional alert binary sensor.
 
 Datasheet references in this repo:
 
@@ -38,7 +38,7 @@ Place this repository where ESPHome can load it as an external component, then e
 external_components:
   - source:
       type: local
-      path: /config/esphome/components
+      path: /config/esphome/external_components #your external components folder
     components: [tmp102_extended]
 
 i2c:
@@ -61,7 +61,7 @@ For a Git source, use ESPHome's `type: git` source. This repo keeps the componen
 external_components:
   - source:
       type: git
-      url: https://github.com/USER/TMP102.git
+      url: https://github.com/techdregs/TMP102_Extended.git
       ref: main
       path: .
     components: [tmp102_extended]
