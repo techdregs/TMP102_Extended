@@ -2,6 +2,10 @@
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 
+#include <cstdio>
+#include <cmath>
+#include <string>
+
 namespace esphome {
 namespace tmp102_extended {
 
@@ -13,6 +17,8 @@ static const uint8_t TMP102_REGISTER_LOW_LIMIT     = 0x02;
 static const uint8_t TMP102_REGISTER_HIGH_LIMIT    = 0x03;
 
 static const float TMP102_CONVERSION_FACTOR = 0.0625f;
+static const float TMP102_DEFAULT_THIGH = 80.0f;
+static const float TMP102_DEFAULT_TLOW = 75.0f;
 
 // Configuration register high byte bit positions
 static const uint8_t TMP102_CFG_OS_BIT  = 7;  // One-shot trigger
@@ -47,6 +53,7 @@ void TMP102Component::setup() {
       return;
     }
   }
+  this->setup_complete_ = true;
 }
 
 void TMP102Component::dump_config() {
@@ -58,6 +65,9 @@ void TMP102Component::dump_config() {
   LOG_UPDATE_INTERVAL(this);
   LOG_SENSOR("  ", "Temperature", this);
   LOG_BINARY_SENSOR("  ", "Alert", this->alert_sensor_);
+  LOG_NUMBER("  ", "Temperature High", this->high_limit_control_);
+  LOG_NUMBER("  ", "Temperature Low", this->low_limit_control_);
+  LOG_TEXT_SENSOR("  ", "Threshold Status", this->threshold_status_sensor_);
   ESP_LOGCONFIG(TAG, "  Extended Mode: %s", this->extended_mode_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG, "  One-Shot Mode: %s", this->one_shot_mode_ ? "YES" : "NO");
   const char *rate_str =
@@ -182,6 +192,58 @@ bool TMP102Component::write_limit_register_(uint8_t reg, float temperature) {
   return true;
 }
 
+void TMP102Component::publish_threshold_status(const std::string &status) {
+  if (this->threshold_status_sensor_ != nullptr)
+    this->threshold_status_sensor_->publish_state(status);
+}
+
+bool TMP102Component::validate_limit_temperature_(TMP102LimitType limit, float temperature) {
+  char status[96];
+  if (limit == TMP102_LIMIT_HIGH && this->temperature_low_.has_value() && temperature < *this->temperature_low_) {
+    std::snprintf(status, sizeof(status), "Rejected: high %.2f°C below clear %.2f°C", temperature, *this->temperature_low_);
+    ESP_LOGW(TAG, "%s", status);
+    this->publish_threshold_status(status);
+    return false;
+  }
+  if (limit == TMP102_LIMIT_LOW && this->temperature_high_.has_value() && temperature > *this->temperature_high_) {
+    std::snprintf(status, sizeof(status), "Rejected: clear %.2f°C above high %.2f°C", temperature, *this->temperature_high_);
+    ESP_LOGW(TAG, "%s", status);
+    this->publish_threshold_status(status);
+    return false;
+  }
+  return true;
+}
+
+bool TMP102Component::set_limit_temperature(TMP102LimitType limit, float temperature) {
+  if (!this->validate_limit_temperature_(limit, temperature))
+    return false;
+
+  const uint8_t reg = limit == TMP102_LIMIT_HIGH ? TMP102_REGISTER_HIGH_LIMIT : TMP102_REGISTER_LOW_LIMIT;
+  if (this->setup_complete_) {
+    if (!this->write_limit_register_(reg, temperature)) {
+      this->status_set_warning();
+      this->publish_threshold_status(limit == TMP102_LIMIT_HIGH ? "Write failed: high threshold" : "Write failed: clear threshold");
+      return false;
+    }
+    this->status_clear_warning();
+  }
+
+  if (limit == TMP102_LIMIT_HIGH)
+    this->temperature_high_ = temperature;
+  else
+    this->temperature_low_ = temperature;
+
+  ESP_LOGI(TAG, "%s set to %.2f°C", limit == TMP102_LIMIT_HIGH ? "THIGH" : "TLOW", temperature);
+  this->publish_threshold_status("OK");
+  return true;
+}
+
+float TMP102Component::get_limit_temperature(TMP102LimitType limit) const {
+  if (limit == TMP102_LIMIT_HIGH)
+    return this->temperature_high_.value_or(TMP102_DEFAULT_THIGH);
+  return this->temperature_low_.value_or(TMP102_DEFAULT_TLOW);
+}
+
 void TMP102Component::read_temperature_() {
   // In one-shot mode the pointer register is left at 0x01 (config); re-select temperature register.
   // In continuous mode update() already set the pointer to 0x00 before the timeout.
@@ -232,6 +294,50 @@ void TMP102Component::read_alert_state_() {
   ESP_LOGD(TAG, "AL=%d alert_active=%s", al_bit, alert_active ? "YES" : "NO");
   this->alert_sensor_->publish_state(alert_active);
 }
+
+void TMP102LimitNumber::setup() {
+  float value = this->initial_value_;
+  if (this->restore_value_) {
+    this->pref_ = this->make_entity_preference<float>();
+    if (!this->pref_.load(&value) && std::isnan(value)) {
+      value = this->traits.get_min_value();
+    }
+  }
+  if (std::isnan(value)) {
+    value = this->parent_ != nullptr ? this->parent_->get_limit_temperature(this->limit_type_) : this->traits.get_min_value();
+  }
+  if (value < this->traits.get_min_value() || value > this->traits.get_max_value()) {
+    ESP_LOGW(TAG, "Restored limit %.2f°C outside allowed range; using %.2f°C", value, this->initial_value_);
+    if (this->parent_ != nullptr)
+      this->parent_->publish_threshold_status("Restored value ignored: out of range");
+    value = this->initial_value_;
+  }
+  if (this->parent_ != nullptr && !this->parent_->set_limit_temperature(this->limit_type_, value)) {
+    value = this->parent_->get_limit_temperature(this->limit_type_);
+  }
+  this->publish_state(value);
+}
+
+void TMP102LimitNumber::control(float value) {
+  if (this->parent_ != nullptr && this->parent_->set_limit_temperature(this->limit_type_, value)) {
+    this->publish_state(value);
+    if (this->restore_value_)
+      this->pref_.save(&value);
+    return;
+  }
+  if (this->parent_ != nullptr) {
+    const float current = this->parent_->get_limit_temperature(this->limit_type_);
+    this->publish_state(current);
+    this->set_timeout("revert", 250, [this, current]() { this->publish_state(current); });
+  }
+}
+
+void TMP102LimitNumber::dump_config() {
+  const char *type = this->limit_type_ == TMP102_LIMIT_HIGH ? "TMP102 High Limit" : "TMP102 Low Limit";
+  number::log_number(TAG, "", type, this);
+  ESP_LOGCONFIG(TAG, "  Restore Value: %s", YESNO(this->restore_value_));
+}
+
 
 }  // namespace tmp102_extended
 }  // namespace esphome

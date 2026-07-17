@@ -100,9 +100,10 @@ sensor:
 | `alert_polarity` | `active_low` | `active_low`, `active_high` | Sets ALERT output polarity and binary-sensor interpretation. |
 | `thermostat_mode` | `comparator` | `comparator`, `interrupt` | Selects TMP102 alert behavior. |
 | `fault_queue` | `1` | `1`, `2`, `4`, `6` | Consecutive out-of-limit conversions required before alert activates. Helps reject noise. |
-| `temperature_high` | chip default `80 C` if omitted | temperature | High alert threshold, written to `THIGH`. |
-| `temperature_low` | chip default `75 C` if omitted | temperature | Low alert threshold, written to `TLOW`. |
+| `temperature_high` | chip default `80 C` if omitted | temperature or number config | High alert threshold, written to `THIGH`. Scalar form is fixed; object form creates a Home Assistant number entity. |
+| `temperature_low` | chip default `75 C` if omitted | temperature or number config | Low alert threshold, written to `TLOW`. Scalar form is fixed; object form creates a Home Assistant number entity. |
 | `alert` | omitted | binary sensor config | Optional binary sensor published from the TMP102 AL bit. |
+| `threshold_status` | omitted | text sensor config | Optional visible status text for accepted/rejected runtime threshold changes. |
 
 Temperature sensor metadata:
 
@@ -124,6 +125,50 @@ If only one threshold is configured, the other TMP102 power-up default remains a
 
 - If only `temperature_high` is set, it must be at least `75 C` because default `TLOW` is `75 C`.
 - If only `temperature_low` is set, it must be no more than `80 C` because default `THIGH` is `80 C`.
+
+### Home Assistant Adjustable Thresholds
+
+`temperature_high` and `temperature_low` support two forms. A plain temperature is a fixed firmware threshold and creates no Home Assistant number entity:
+
+```yaml
+sensor:
+  - platform: tmp102_extended
+    name: "Freezer"
+    address: 0x48
+    thermostat_mode: comparator
+    alert_polarity: active_high
+    temperature_high: "85°F"
+    temperature_low: "84°F"
+    alert:
+      name: "Freezer High Temp Alert"
+```
+
+An object creates a Home Assistant number entity. Changing that entity writes the TMP102 limit register immediately, without recompiling firmware. Values are stored in ESPHome preferences by default and restored after ESP32 reboot or power loss.
+
+```yaml
+sensor:
+  - platform: tmp102_extended
+    name: "Freezer"
+    address: 0x48
+    thermostat_mode: comparator
+    alert_polarity: active_high
+    temperature_high:
+      name: "Freezer High Temp Threshold"
+      initial_value: "85°F"
+      restore_value: true
+    temperature_low:
+      name: "Freezer Clear Temp Threshold"
+      initial_value: "84°F"
+      restore_value: true
+    alert:
+      name: "Freezer High Temp Alert"
+    threshold_status:
+      name: "Freezer Threshold Status"
+```
+
+`initial_value` is the first-boot/fallback value. With `restore_value: true`, the restored Home Assistant number value wins after ESP32 reboot and is written back to the TMP102 during setup. Runtime changes are validated the same way as YAML: low limit must be less than or equal to high limit, and values must fit the selected normal or extended TMP102 range.
+
+Add `threshold_status` when using adjustable thresholds if you want Home Assistant to show whether a runtime change was accepted. It publishes `OK` after a successful write and a short rejection/failure message when a value cannot be applied. This entity is intentionally not diagnostic/config-category so it appears with the controls.
 
 ## Continuous Mode
 
