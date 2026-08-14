@@ -80,10 +80,12 @@ void TMP102Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Alert Polarity: %s",
     this->alert_polarity_ == TMP102_ALERT_POLARITY_ACTIVE_LOW ? "Active Low" : "Active High");
   ESP_LOGCONFIG(TAG, "  Fault Queue: %d", this->fault_queue_);
-  if (this->temperature_high_.has_value())
+  if (this->temperature_high_.has_value()) {
     ESP_LOGCONFIG(TAG, "  Temperature High: %.1f°C", *this->temperature_high_);
-  if (this->temperature_low_.has_value())
+  }
+  if (this->temperature_low_.has_value()) {
     ESP_LOGCONFIG(TAG, "  Temperature Low: %.1f°C", *this->temperature_low_);
+  }
   if (this->alert_sensor_ != nullptr) {
     if (!this->temperature_high_.has_value() && !this->temperature_low_.has_value()) {
       ESP_LOGW(TAG, "  Alert configured but temperature_high/temperature_low not set; "
@@ -148,20 +150,24 @@ bool TMP102Component::write_config_register_() {
   }
   high_byte |= static_cast<uint8_t>(fq_bits << TMP102_CFG_F0_BIT);
 
-  if (this->alert_polarity_ == TMP102_ALERT_POLARITY_ACTIVE_HIGH)
+  if (this->alert_polarity_ == TMP102_ALERT_POLARITY_ACTIVE_HIGH) {
     high_byte |= static_cast<uint8_t>(1 << TMP102_CFG_POL_BIT);
+  }
 
-  if (this->thermostat_mode_ == TMP102_THERMOSTAT_MODE_INTERRUPT)
+  if (this->thermostat_mode_ == TMP102_THERMOSTAT_MODE_INTERRUPT) {
     high_byte |= static_cast<uint8_t>(1 << TMP102_CFG_TM_BIT);
+  }
 
-  if (this->one_shot_mode_)
+  if (this->one_shot_mode_) {
     high_byte |= static_cast<uint8_t>(1 << TMP102_CFG_SD_BIT);  // SD=1 for shutdown/one-shot
+  }
 
   // CR1:CR0 at bits 7:6
   low_byte |= static_cast<uint8_t>(static_cast<uint8_t>(this->conversion_rate_) << TMP102_CFG_CR0_BIT);
 
-  if (this->extended_mode_)
+  if (this->extended_mode_) {
     low_byte |= static_cast<uint8_t>(1 << TMP102_CFG_EM_BIT);
+  }
 
   // Cache for use in update() one-shot path
   this->config_high_byte_ = high_byte;
@@ -193,8 +199,9 @@ bool TMP102Component::write_limit_register_(uint8_t reg, float temperature) {
 }
 
 void TMP102Component::publish_threshold_status(const std::string &status) {
-  if (this->threshold_status_sensor_ != nullptr)
+  if (this->threshold_status_sensor_ != nullptr) {
     this->threshold_status_sensor_->publish_state(status);
+  }
 }
 
 bool TMP102Component::validate_limit_temperature_(TMP102LimitType limit, float temperature) {
@@ -215,8 +222,9 @@ bool TMP102Component::validate_limit_temperature_(TMP102LimitType limit, float t
 }
 
 bool TMP102Component::set_limit_temperature(TMP102LimitType limit, float temperature) {
-  if (!this->validate_limit_temperature_(limit, temperature))
+  if (!this->validate_limit_temperature_(limit, temperature)) {
     return false;
+  }
 
   const uint8_t reg = limit == TMP102_LIMIT_HIGH ? TMP102_REGISTER_HIGH_LIMIT : TMP102_REGISTER_LOW_LIMIT;
   if (this->setup_complete_) {
@@ -228,10 +236,11 @@ bool TMP102Component::set_limit_temperature(TMP102LimitType limit, float tempera
     this->status_clear_warning();
   }
 
-  if (limit == TMP102_LIMIT_HIGH)
+  if (limit == TMP102_LIMIT_HIGH) {
     this->temperature_high_ = temperature;
-  else
+  } else {
     this->temperature_low_ = temperature;
+  }
 
   ESP_LOGI(TAG, "%s set to %.2f°C", limit == TMP102_LIMIT_HIGH ? "THIGH" : "TLOW", temperature);
   this->publish_threshold_status("OK");
@@ -239,8 +248,9 @@ bool TMP102Component::set_limit_temperature(TMP102LimitType limit, float tempera
 }
 
 float TMP102Component::get_limit_temperature(TMP102LimitType limit) const {
-  if (limit == TMP102_LIMIT_HIGH)
+  if (limit == TMP102_LIMIT_HIGH) {
     return this->temperature_high_.value_or(TMP102_DEFAULT_THIGH);
+  }
   return this->temperature_low_.value_or(TMP102_DEFAULT_TLOW);
 }
 
@@ -308,8 +318,9 @@ void TMP102LimitNumber::setup() {
   }
   if (value < this->traits.get_min_value() || value > this->traits.get_max_value()) {
     ESP_LOGW(TAG, "Restored limit %.2f°C outside allowed range; using %.2f°C", value, this->initial_value_);
-    if (this->parent_ != nullptr)
+    if (this->parent_ != nullptr) {
       this->parent_->publish_threshold_status("Restored value ignored: out of range");
+    }
     value = this->initial_value_;
   }
   if (this->parent_ != nullptr && !this->parent_->set_limit_temperature(this->limit_type_, value)) {
@@ -321,8 +332,9 @@ void TMP102LimitNumber::setup() {
 void TMP102LimitNumber::control(float value) {
   if (this->parent_ != nullptr && this->parent_->set_limit_temperature(this->limit_type_, value)) {
     this->publish_state(value);
-    if (this->restore_value_)
+    if (this->restore_value_) {
       this->pref_.save(&value);
+    }
     return;
   }
   if (this->parent_ != nullptr) {
